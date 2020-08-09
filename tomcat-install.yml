@@ -1,0 +1,111 @@
+---
+- name: Tomcat deployment declaration
+  hosts: remote-nodes
+  become: yes
+  become_method: sudo
+  remote_user: vagrant
+  vars:
+    tomcat_ver: 9.0.30
+    ui_manager_user: manager
+    ui_manager_pass: tomcatmanager@1
+    ui_admin_username: admin
+    ui_admin_pass: tomcatmanager@1
+    JAVA_HOME: /usr/lib/jvm/default-java
+    tom_folder: tomcat1
+    shut_down_port: 7110
+    connector_port: 7111
+    connector_redirect_port: 7112
+    AJP_connector_port: 7113
+    AJP_connector_redirect_port: 7114
+
+  tasks:
+
+  - name: Java check
+    command:
+        java -version
+    register: java_installed
+    failed_when: no
+
+  - name: Install jdk and jre
+    apt:
+        pkg:
+        - default-jre
+        - default-jdk
+        update_cache: yes
+    when: java_installed.rc != 0
+
+  - name: Add "tomcat" group
+    group:
+      name: tomcat
+
+  - name: Add "tomcat" user
+    user:
+      name: tomcat
+      group: tomcat
+      home: /usr/share/tomcat
+      createhome: no
+      system: yes
+
+  - name: Download Tomcat
+    get_url:
+      url: https://archive.apache.org/dist/tomcat/tomcat-9/v{{ tomcat_ver }}/bin/apache-tomcat-{{ tomcat_ver }}.tar.gz
+      dest: /tmp/apache-tomcat-{{ tomcat_ver }}.tar.gz
+
+
+  - name: Create a tomcat directory
+    file:
+      path: /usr/share/{{ tom_folder }}
+      state: directory
+      owner: tomcat
+      group: tomcat
+    # when: not directory_exists.stat.exists
+
+  - name: Extract tomcat archive
+    unarchive:
+      src: /tmp/apache-tomcat-{{ tomcat_ver }}.tar.gz
+      dest: /usr/share/{{ tom_folder }}
+      owner: tomcat
+      group: tomcat
+      remote_src: yes
+      extra_opts: "--strip-components=1"
+      creates: /usr/share/{{ tom_folder }}/bin
+
+  - name: Copy tomcat service file
+    template:
+      src: tomcat.service.j2
+      dest: /etc/systemd/system/{{ tom_folder }}.service
+    when: ansible_service_mgr == "systemd"
+
+  - name: Start and enable tomcat
+    service:
+      daemon_reload: yes
+      name: "{{ tom_folder }}"
+      state: started
+      enabled: yes
+    when: ansible_service_mgr == "systemd"
+
+  - name: Set GUI access credentials
+    template:
+      src: tomcat-users.xml.j2
+      dest: /usr/share/{{ tom_folder }}/conf/tomcat-users.xml
+    notify: restart tomcat
+
+  - name: Server xml to be copied
+    template:
+      src: server.xml.j2
+      dest: /usr/share/{{ tom_folder }}/conf/server.xml
+    notify: restart tomcat
+
+  - name: Allow access to Manager and Host Manager apps from any IP
+    template:
+      src: context.xml.j2
+      dest: "{{ item }}"
+    with_items:
+      - /usr/share/{{ tom_folder }}/webapps/host-manager/META-INF/context.xml
+      - /usr/share/{{ tom_folder }}/webapps/manager/META-INF/context.xml
+
+  handlers:
+    - name: restart tomcat
+      service:
+        name: "{{ tom_folder }}"
+        state: restarted
